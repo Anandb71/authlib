@@ -34,8 +34,31 @@ class OpenIDMixin:
         metadata = self.load_server_metadata()
         resp = self.get(metadata["userinfo_endpoint"], **kwargs)
         resp.raise_for_status()
-        data = resp.json()
+        content_type = resp.headers.get("Content-Type", "")
+        if content_type.split(";")[0].strip().lower() == "application/jwt":
+            data = self._decode_userinfo_jwt(resp.text, metadata)
+        else:
+            data = resp.json()
         return UserInfo(data)
+
+    def _decode_userinfo_jwt(self, text, metadata):
+        alg_values = metadata.get("userinfo_signing_alg_values_supported")
+        registry = JWSRegistry(algorithms=alg_values, strict_check_header=False)
+        key_set = KeySet.import_key_set(self.fetch_jwk_set())
+        try:
+            token = jwt.decode(text, key=key_set, registry=registry)
+        except InvalidKeyIdError:
+            key_set = KeySet.import_key_set(self.fetch_jwk_set(force=True))
+            token = jwt.decode(text, key=key_set, registry=registry)
+
+        options = {
+            "iss": {"essential": True},
+            "aud": {"essential": True, "value": self.client_id},
+        }
+        if "issuer" in metadata:
+            options["iss"]["value"] = metadata["issuer"]
+        jwt.JWTClaimsRegistry(leeway=120, **options).validate(token.claims)
+        return token.claims
 
     def parse_id_token(
         self, token, nonce, claims_options=None, claims_cls=None, leeway=120

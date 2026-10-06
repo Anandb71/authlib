@@ -2,9 +2,11 @@ import time
 from unittest import mock
 
 import pytest
+import requests
 from flask import Flask
 from joserfc import jwt
 from joserfc.errors import InvalidClaimError
+from joserfc.errors import MissingClaimError
 from joserfc.jwk import KeySet
 from joserfc.jwk import OctKey
 
@@ -195,3 +197,105 @@ def test_force_fetch_jwks_uri():
             token["id_token"] = id_token
             user = client.parse_id_token(token, nonce="n")
             assert user.sub == "123"
+
+
+def _openid_userinfo_client():
+    app = Flask(__name__)
+    app.secret_key = "!"
+    oauth = OAuth(app)
+    client = oauth.register(
+        "dev",
+        client_id="dev",
+        client_secret="dev",
+        fetch_token=get_bearer_token,
+        userinfo_endpoint="https://provider.test/userinfo",
+        jwks={"keys": [secret_key.as_dict()]},
+        issuer="https://provider.test",
+        userinfo_signing_alg_values_supported=["HS256", "RS256"],
+    )
+    return app, client
+
+
+def _userinfo_claims():
+    return {
+        "sub": "123",
+        "iss": "https://provider.test",
+        "aud": "dev",
+        "email": "user@example.com",
+    }
+
+
+def _signed_userinfo_send(claims, content_type="application/jwt"):
+    token = jwt.encode({"alg": "HS256"}, claims, secret_key)
+
+    def fake_send(sess, req, **kwargs):
+        resp = requests.Response()
+        resp.status_code = 200
+        resp.headers["Content-Type"] = content_type
+        resp._content = token.encode()
+        resp.encoding = "utf-8"
+        return resp
+
+    return fake_send
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/jwt", "application/jwt; charset=utf-8", "APPLICATION/JWT"],
+)
+def test_fetch_userinfo_signed(content_type):
+    app, client = _openid_userinfo_client()
+    fake_send = _signed_userinfo_send(_userinfo_claims(), content_type)
+    with app.test_request_context():
+        with mock.patch("requests.sessions.Session.send", fake_send):
+            user = client.userinfo()
+            assert user.sub == "123"
+            assert user.email == "user@example.com"
+            assert user["iss"] == "https://provider.test"
+            assert user["aud"] == "dev"
+
+
+def test_fetch_userinfo_signed_aud_list():
+    app, client = _openid_userinfo_client()
+    claims = _userinfo_claims()
+    claims["aud"] = ["other", "dev"]
+    fake_send = _signed_userinfo_send(claims)
+    with app.test_request_context():
+        with mock.patch("requests.sessions.Session.send", fake_send):
+            user = client.userinfo()
+            assert user.sub == "123"
+            assert user["aud"] == ["other", "dev"]
+
+
+def test_fetch_userinfo_signed_bad_aud():
+    app, client = _openid_userinfo_client()
+    claims = _userinfo_claims()
+    claims["aud"] = "other"
+    fake_send = _signed_userinfo_send(claims)
+    with app.test_request_context():
+        with mock.patch("requests.sessions.Session.send", fake_send):
+            with pytest.raises(InvalidClaimError):
+                client.userinfo()
+
+
+def test_fetch_userinfo_signed_bad_iss():
+    app, client = _openid_userinfo_client()
+    claims = _userinfo_claims()
+    claims["iss"] = "https://wrong-provider.test"
+    fake_send = _signed_userinfo_send(claims)
+    with app.test_request_context():
+        with mock.patch("requests.sessions.Session.send", fake_send):
+            with pytest.raises(InvalidClaimError):
+                client.userinfo()
+
+
+@pytest.mark.parametrize("claim", ["iss", "aud"])
+def test_fetch_userinfo_signed_missing_claim(claim):
+    app, client = _openid_userinfo_client()
+    claims = _userinfo_claims()
+    del claims[claim]
+    fake_send = _signed_userinfo_send(claims)
+    with app.test_request_context():
+        with mock.patch("requests.sessions.Session.send", fake_send):
+            with pytest.raises(MissingClaimError):
+                client.userinfo()

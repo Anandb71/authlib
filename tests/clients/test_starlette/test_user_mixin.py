@@ -48,6 +48,68 @@ async def test_fetch_userinfo():
     await run_fetch_userinfo({"sub": "123"})
 
 
+def _signed_userinfo_claims():
+    return {
+        "sub": "123",
+        "iss": "https://provider.test",
+        "aud": "dev",
+        "email": "user@example.com",
+    }
+
+
+async def _fetch_signed_userinfo(claims, content_type="application/jwt"):
+    token = jwt.encode({"alg": "HS256"}, claims, secret_key)
+    transport = ASGITransport(
+        AsyncPathMapDispatch(
+            {
+                "/userinfo": {
+                    "body": token,
+                    "headers": {"Content-Type": content_type},
+                }
+            }
+        )
+    )
+
+    oauth = OAuth()
+
+    async def fetch_token(request):
+        return get_bearer_token()
+
+    client = oauth.register(
+        "dev",
+        client_id="dev",
+        client_secret="dev",
+        fetch_token=fetch_token,
+        userinfo_endpoint="https://provider.test/userinfo",
+        jwks={"keys": [secret_key.as_dict()]},
+        issuer="https://provider.test",
+        userinfo_signing_alg_values_supported=["HS256", "RS256"],
+        client_kwargs={"transport": transport},
+    )
+    req = Request({"type": "http", "session": {}})
+    return await client.userinfo(request=req)
+
+
+@pytest.mark.asyncio
+async def test_fetch_userinfo_signed():
+    user = await _fetch_signed_userinfo(
+        _signed_userinfo_claims(),
+        "application/jwt; charset=utf-8",
+    )
+    assert user.sub == "123"
+    assert user.email == "user@example.com"
+    assert user["iss"] == "https://provider.test"
+    assert user["aud"] == "dev"
+
+
+@pytest.mark.asyncio
+async def test_fetch_userinfo_signed_bad_aud():
+    claims = _signed_userinfo_claims()
+    claims["aud"] = "other"
+    with pytest.raises(InvalidClaimError):
+        await _fetch_signed_userinfo(claims)
+
+
 @pytest.mark.asyncio
 async def test_parse_id_token():
     token = get_bearer_token()

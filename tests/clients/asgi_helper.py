@@ -57,7 +57,7 @@ class AsyncPathMapDispatch:
         else:
             if isinstance(body, str):
                 body = body.encode()
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
         response = ASGIResponse(
             status_code=status_code,

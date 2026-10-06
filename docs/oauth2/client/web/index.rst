@@ -375,6 +375,10 @@ And later, when the client has obtained the access token, we can call::
         user = oauth.google.userinfo(token=token)
         return '...'
 
+When the UserInfo response is a signed JWT (``Content-Type:
+application/jwt``), ``userinfo()`` verifies it against the provider's JWKS,
+checks ``iss`` and ``aud``, and returns the claims.
+
 
 Parsing ``id_token``
 ~~~~~~~~~~~~~~~~~~~~

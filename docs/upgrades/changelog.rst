@@ -15,6 +15,8 @@ Version 1.x.x
   a draft extension to :rfc:`7523` for cross-application access using identity
   assertions issued by an external enterprise IdP.
   See :ref:`specs/rfc7523-id-jag` for details. :pr:`898`
+- Verify signed ``application/jwt`` UserInfo responses against the provider
+  JWKS, checking ``iss`` and ``aud``. :issue:`941`
 
 Version 1.8.0
 -------------
